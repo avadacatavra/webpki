@@ -16,6 +16,8 @@ use untrusted;
 use {cert, der, Error, name, signed_data, SignatureAlgorithm, TrustAnchor};
 use cert::{Cert, EndEntityOrCA};
 use time;
+use arrayvec::ArrayVec;
+use rayon::prelude::*;
 
 pub fn build_chain<'a>(required_eku_if_present: KeyPurposeId,
                        supported_sig_algs: &[&SignatureAlgorithm],
@@ -66,7 +68,7 @@ pub fn build_chain<'a>(required_eku_if_present: KeyPurposeId,
         // TODO: try!(check_distrust(trust_anchor_subject,
         //                           trust_anchor_spki));
 
-        try!(check_signatures(supported_sig_algs, cert, trust_anchor_spki));
+        try!(check_signatures(supported_sig_algs, cert, trust_anchor_spki));    //avada called here
 
         Ok(())
     }) {
@@ -115,24 +117,50 @@ pub fn build_chain<'a>(required_eku_if_present: KeyPurposeId,
 }
 
 fn check_signatures(supported_sig_algs: &[&SignatureAlgorithm],
-                    cert_chain: &Cert, trust_anchor_key: untrusted::Input)
+                    cert_chain: &Cert, trust_anchor_key: untrusted::Input)  //so cert is a linked list
                     -> Result<(), Error> {
-    let mut spki_value = trust_anchor_key;
+    const MAX_SUB_CA_COUNT: usize = 6;  //not sure where to put this
     let mut cert = cert_chain;
+    let mut sig_vec = 
+        ArrayVec::<[(untrusted::Input, &signed_data::SignedData); 
+        1+MAX_SUB_CA_COUNT+1]>::new();    //array vec of (spki_value, c.signed_data)
+
+    //collect signatures from linked list of certs into array vec
+    match sig_vec.push((trust_anchor_key, &cert.signed_data)) {
+        Some(_) => return Err(Error::UnknownIssuer),
+        _ => (),
+    };
+
     loop {
-        try!(signed_data::verify_signed_data(supported_sig_algs, spki_value,
-                                             &cert.signed_data));
+            match &cert.ee_or_ca {
+                &EndEntityOrCA::CA(child_cert) => {
+                    match sig_vec.push((cert.spki, &child_cert.signed_data)) {
+                        Some(_) => return Err(Error::UnknownIssuer),
+                        _ => cert = child_cert,
+                    }
+                },
+                &EndEntityOrCA::EndEntity => { break; }
+        }
+
+    }
+
+    //so now, you can't really exit early if you get a failure. what's the performance tradeoff?
+    sig_vec.par_iter().for_each(|sig_tuple| {
+        let spki_value = sig_tuple.0;
+        let signed_data = sig_tuple.1;
+
+        signed_data::verify_signed_data(supported_sig_algs,
+                                        spki_value,
+                                        signed_data)
+                                        .unwrap()
 
         // TODO: check revocation
 
-        match &cert.ee_or_ca {
-            &EndEntityOrCA::CA(child_cert) => {
-                spki_value = cert.spki;
-                cert = child_cert;
-            },
-            &EndEntityOrCA::EndEntity => { break; }
-        }
-    }
+
+    });
+
+
+
 
     Ok(())
 }

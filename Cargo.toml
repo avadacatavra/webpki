@@ -58,6 +58,8 @@ default = ["trust_anchor_util"]
 trust_anchor_util = []
 
 [dependencies]
+arrayvec = "0.3"
+rayon = "0.6"
 ring = "0.6.3"
 rustc-serialize = "0.3.15"
 time = "0.1"

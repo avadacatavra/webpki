@@ -78,8 +78,11 @@
 )]
 
 #[cfg(any(test, feature = "trust_anchor_util"))]
+extern crate arrayvec;
 #[macro_use(format)]
 extern crate std;
+
+extern crate rayon;     //need to make an option
 
 extern crate ring;
 extern crate time;
